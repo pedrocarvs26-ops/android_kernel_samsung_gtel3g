@@ -393,6 +393,7 @@
                 CALL(sys_ni_syscall)            @ 381 sched_getattr
                 CALL(sys_ni_syscall)            @ 382 renameat2
                 CALL(sys_seccomp)               @ 383
+                CALL(sys_getrandom)             @ 384
 #ifndef syscalls_counted
 .equ syscalls_padding, ((NR_syscalls + 3) & ~3) - NR_syscalls
 #define syscalls_counted
