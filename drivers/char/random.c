@@ -255,6 +255,8 @@
 #include <linux/fips.h>
 #include <linux/ptrace.h>
 #include <linux/kmemcheck.h>
+#include <linux/syscalls.h>
+#include <uapi/linux/random.h>
 
 #ifdef CONFIG_GENERIC_HARDIRQS
 # include <linux/irq.h>
@@ -1518,4 +1520,32 @@ randomize_range(unsigned long start, unsigned long end, unsigned long len)
 	if (end <= start + len)
 		return 0;
 	return PAGE_ALIGN(get_random_int() % range + start);
+}
+
+SYSCALL_DEFINE3(getrandom, char __user *, buf, size_t, count,
+		unsigned int, flags)
+{
+	if (flags & ~(GRND_NONBLOCK|GRND_RANDOM))
+		return -EINVAL;
+
+	if (count > INT_MAX)
+		count = INT_MAX;
+
+	if (count == 0)
+		return 0;
+
+	if (flags & GRND_RANDOM) {
+		if (flags & GRND_NONBLOCK) {
+			if (input_pool.entropy_count < random_read_wakeup_thresh)
+				return -EAGAIN;
+		}
+		return extract_entropy_user(&blocking_pool, buf, count);
+	}
+
+	if (unlikely(nonblocking_pool.initialized == 0)) {
+		if (flags & GRND_NONBLOCK)
+			return -EAGAIN;
+	}
+
+	return extract_entropy_user(&nonblocking_pool, buf, count);
 }
