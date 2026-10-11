@@ -182,7 +182,7 @@ endif
 ccflags-y += -DSVN_REV_STRING=\"$(DRIVER_REV)\"
 
 VERSION_STRINGS :=
-VERSION_STRINGS += API_VERSION=$(shell grep "\#define _MALI_API_VERSION" $(src)/include/linux/mali/mali_utgard_uk_types.h | cut -d' ' -f 3 )
+VERSION_STRINGS += API_VERSION=$(shell grep "\#define _MALI_API_VERSION" $(srctree)/drivers/gpu/mali400/r4p1/include/linux/mali/mali_utgard_uk_types.h | cut -d' ' -f 3 )
 VERSION_STRINGS += REPO_URL=$(REPO_URL)
 VERSION_STRINGS += REVISION=$(DRIVER_REV)
 VERSION_STRINGS += CHANGED_REVISION=$(CHANGED_REVISION)
