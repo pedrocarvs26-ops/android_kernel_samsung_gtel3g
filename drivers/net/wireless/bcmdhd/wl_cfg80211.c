@@ -300,12 +300,10 @@ common_iface_combinations[] = {
 #define DOT11_LEAP_AUTH	0x80 /* LEAP auth frame paylod constants */
 #endif /* BCMCCX */
 
-#ifdef MFP
 #define WL_AKM_SUITE_MFP_1X  0x000FAC05
 #define WL_AKM_SUITE_MFP_PSK 0x000FAC06
 #define WL_MFP_CAPABLE 		0x1
 #define WL_MFP_REQUIRED		0x2
-#endif /* MFP */
 
 #ifndef IBSS_COALESCE_ALLOWED
 #define IBSS_COALESCE_ALLOWED 0
@@ -795,7 +793,7 @@ static const u32 __wl_cipher_suites[] = {
 	WLAN_CIPHER_SUITE_WEP104,
 	WLAN_CIPHER_SUITE_TKIP,
 	WLAN_CIPHER_SUITE_CCMP,
-	WLAN_CIPHER_SUITE_AES_CMAC,
+	/* WLAN_CIPHER_SUITE_AES_CMAC disabled: BCM4343 has no 802.11w BIP in FW */
 #ifdef BCMWAPI_WPI
 	WLAN_CIPHER_SUITE_SMS4,
 #endif
@@ -3174,18 +3172,20 @@ wl_set_wpa_version(struct net_device *dev, struct cfg80211_connect_params *sme)
 		return BCME_ERROR;
 	}
 
-	if (sme->crypto.wpa_versions & NL80211_WPA_VERSION_1)
+	if (sme->crypto.wpa_versions & NL80211_WPA_VERSION_2) {
+		val = WPA2_AUTH_PSK |
+#ifdef BCMCCX
+			WPA2_AUTH_CCKM |
+#endif
+			WPA2_AUTH_UNSPECIFIED;
+		if (sme->crypto.wpa_versions & NL80211_WPA_VERSION_1)
+			val |= WPA_AUTH_PSK | WPA_AUTH_UNSPECIFIED;
+	} else if (sme->crypto.wpa_versions & NL80211_WPA_VERSION_1)
 		val = WPA_AUTH_PSK |
 #ifdef BCMCCX
 			WPA_AUTH_CCKM |
 #endif
 			WPA_AUTH_UNSPECIFIED;
-	else if (sme->crypto.wpa_versions & NL80211_WPA_VERSION_2)
-		val = WPA2_AUTH_PSK|
-#ifdef BCMCCX
-			WPA2_AUTH_CCKM |
-#endif
-			WPA2_AUTH_UNSPECIFIED;
 	else
 		val = WPA_AUTH_DISABLED;
 
@@ -3311,29 +3311,34 @@ wl_set_set_cipher(struct net_device *dev, struct cfg80211_connect_params *sme)
 	}
 
 	if (sme->crypto.n_ciphers_pairwise) {
-		switch (sme->crypto.ciphers_pairwise[0]) {
-		case WLAN_CIPHER_SUITE_WEP40:
-		case WLAN_CIPHER_SUITE_WEP104:
-			pval = WEP_ENABLED;
-			break;
-		case WLAN_CIPHER_SUITE_TKIP:
-			pval = TKIP_ENABLED;
-			break;
-		case WLAN_CIPHER_SUITE_CCMP:
-		case WLAN_CIPHER_SUITE_AES_CMAC:
-			pval = AES_ENABLED;
-			break;
+		int _ci;
+		for (_ci = 0; _ci < sme->crypto.n_ciphers_pairwise; _ci++) {
+			switch (sme->crypto.ciphers_pairwise[_ci]) {
+			case WLAN_CIPHER_SUITE_WEP40:
+			case WLAN_CIPHER_SUITE_WEP104:
+				pval |= WEP_ENABLED;
+				break;
+			case WLAN_CIPHER_SUITE_TKIP:
+				pval |= TKIP_ENABLED;
+				break;
+			case WLAN_CIPHER_SUITE_CCMP:
+			case WLAN_CIPHER_SUITE_AES_CMAC:
+				pval |= AES_ENABLED;
+				break;
 #ifdef BCMWAPI_WPI
-		case WLAN_CIPHER_SUITE_SMS4:
-			val = SMS4_ENABLED;
-			pval = SMS4_ENABLED;
-			break;
+			case WLAN_CIPHER_SUITE_SMS4:
+				val = SMS4_ENABLED;
+				pval |= SMS4_ENABLED;
+				break;
 #endif
-		default:
-			WL_ERR(("invalid cipher pairwise (%d)\n",
-				sme->crypto.ciphers_pairwise[0]));
-			return -EINVAL;
+			default:
+				WL_ERR(("invalid cipher pairwise (%d)\n",
+					sme->crypto.ciphers_pairwise[_ci]));
+				return -EINVAL;
+			}
 		}
+		if ((pval & AES_ENABLED) && (pval & TKIP_ENABLED))
+			pval = AES_ENABLED;
 	}
 #if defined(BCMSUP_4WAY_HANDSHAKE) && defined(WLAN_AKM_SUITE_FT_8021X)
 	/* Ensure in-dongle supplicant is turned on when FBT wants to do the 4-way
@@ -3510,14 +3515,12 @@ wl_set_key_mgmt(struct net_device *dev, struct cfg80211_connect_params *sme)
 			case WLAN_AKM_SUITE_8021X:
 				val = WPA2_AUTH_UNSPECIFIED;
 				break;
-#ifdef MFP
 			case WL_AKM_SUITE_MFP_1X:
 				val = WPA2_AUTH_UNSPECIFIED;
 				break;
 			case WL_AKM_SUITE_MFP_PSK:
 				val = WPA2_AUTH_PSK;
 				break;
-#endif
 			case WLAN_AKM_SUITE_PSK:
 				val = WPA2_AUTH_PSK;
 				break;
@@ -4289,9 +4292,8 @@ wl_add_keyext(struct wiphy *wiphy, struct net_device *dev,
 			WL_DBG(("WLAN_CIPHER_SUITE_TKIP\n"));
 			break;
 		case WLAN_CIPHER_SUITE_AES_CMAC:
-			key.algo = CRYPTO_ALGO_AES_CCM;
-			WL_DBG(("WLAN_CIPHER_SUITE_AES_CMAC\n"));
-			break;
+			WL_DBG(("Ignore WLAN_CIPHER_SUITE_AES_CMAC in wl_add_keyext\n"));
+			return 0;
 		case WLAN_CIPHER_SUITE_CCMP:
 			key.algo = CRYPTO_ALGO_AES_CCM;
 			WL_DBG(("WLAN_CIPHER_SUITE_CCMP\n"));
@@ -4409,10 +4411,8 @@ wl_cfg80211_add_key(struct wiphy *wiphy, struct net_device *dev,
 		WL_DBG(("WLAN_CIPHER_SUITE_TKIP\n"));
 		break;
 	case WLAN_CIPHER_SUITE_AES_CMAC:
-		key.algo = CRYPTO_ALGO_AES_CCM;
-		val = AES_ENABLED;
-		WL_DBG(("WLAN_CIPHER_SUITE_AES_CMAC\n"));
-		break;
+		WL_DBG(("Ignore WLAN_CIPHER_SUITE_AES_CMAC in wl_cfg80211_add_key\n"));
+		return 0;
 	case WLAN_CIPHER_SUITE_CCMP:
 		key.algo = CRYPTO_ALGO_AES_CCM;
 		val = AES_ENABLED;
@@ -4507,10 +4507,8 @@ wl_cfg80211_del_key(struct wiphy *wiphy, struct net_device *dev,
 	}
 	WL_DBG(("Enter\n"));
 
-#ifndef IEEE80211W
-	if ((key_idx >= DOT11_MAX_DEFAULT_KEYS) && (key_idx < DOT11_MAX_DEFAULT_KEYS+2))
-		return -EINVAL;
-#endif
+	if (key_idx >= DOT11_MAX_DEFAULT_KEYS)
+		return 0;
 
 	RETURN_EIO_IF_NOT_UP(cfg);
 	memset(&key, 0, sizeof(key));
