@@ -321,6 +321,9 @@ static unsigned int evdev_compute_buffer_size(struct input_dev *dev)
 	return roundup_pow_of_two(n_events);
 }
 
+static int evdev_enable_suspend_block(struct evdev *evdev,
+				      struct evdev_client *client);
+
 static int evdev_open(struct inode *inode, struct file *file)
 {
 	struct evdev *evdev = container_of(inode->i_cdev, struct evdev, cdev);
@@ -343,6 +346,8 @@ static int evdev_open(struct inode *inode, struct file *file)
 			dev_name(&evdev->dev), task_tgid_vnr(current));
 	client->evdev = evdev;
 	evdev_attach_client(evdev, client);
+	/* Auto-enable suspend block for Android wakeup */
+	evdev_enable_suspend_block(evdev, client);
 
 	error = evdev_open_device(evdev);
 	if (error)
