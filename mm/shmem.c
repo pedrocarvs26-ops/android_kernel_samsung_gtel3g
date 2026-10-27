@@ -51,6 +51,9 @@ static struct vfsmount *shm_mnt;
 #include <linux/slab.h>
 #include <linux/backing-dev.h>
 #include <linux/shmem_fs.h>
+#include <linux/syscalls.h>
+#include <uapi/linux/memfd.h>
+#include <uapi/linux/fcntl.h>
 #include <linux/writeback.h>
 #include <linux/blkdev.h>
 #include <linux/pagevec.h>
@@ -1431,6 +1434,19 @@ out_nomem:
 
 static int shmem_mmap(struct file *file, struct vm_area_struct *vma)
 {
+	struct inode *inode = file_inode(file);
+	struct shmem_inode_info *info = SHMEM_I(inode);
+
+	if (info->seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE)) {
+		if ((vma->vm_flags & VM_SHARED) && (vma->vm_flags & VM_WRITE))
+			return -EPERM;
+		if (vma->vm_flags & VM_SHARED)
+			vma->vm_flags &= ~(VM_MAYWRITE);
+	} else if (!(info->seals & F_SEAL_SEAL) && (vma->vm_flags & VM_SHARED) &&
+		   !(vma->vm_flags & VM_WRITE)) {
+		vma->vm_flags &= ~(VM_MAYWRITE);
+	}
+
 	file_accessed(file);
 	vma->vm_ops = &shmem_vm_ops;
 	return 0;
@@ -1458,6 +1474,7 @@ static struct inode *shmem_get_inode(struct super_block *sb, const struct inode 
 		memset(info, 0, (char *)inode - (char *)info);
 		spin_lock_init(&info->lock);
 		info->flags = flags & VM_NORESERVE;
+		info->seals = F_SEAL_SEAL;
 		INIT_LIST_HEAD(&info->swaplist);
 		simple_xattrs_init(&info->xattrs);
 		cache_no_acl(inode);
@@ -2780,6 +2797,22 @@ static const struct address_space_operations shmem_aops = {
 	.error_remove_page = generic_error_remove_page,
 };
 
+
+static ssize_t shmem_file_aio_write(struct kiocb *iocb, const struct iovec *iov,
+				    unsigned long nr_segs, loff_t pos)
+{
+	struct file *file = iocb->ki_filp;
+	struct inode *inode = file_inode(file);
+	struct shmem_inode_info *info = SHMEM_I(inode);
+
+	if (info->seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE))
+		return -EPERM;
+	if ((info->seals & F_SEAL_GROW) && (pos + iov_length(iov, nr_segs) > inode->i_size))
+		return -EPERM;
+
+	return generic_file_aio_write(iocb, iov, nr_segs, pos);
+}
+
 static const struct file_operations shmem_file_operations = {
 	.mmap		= shmem_mmap,
 #ifdef CONFIG_TMPFS
@@ -2787,7 +2820,7 @@ static const struct file_operations shmem_file_operations = {
 	.read		= do_sync_read,
 	.write		= do_sync_write,
 	.aio_read	= shmem_file_aio_read,
-	.aio_write	= generic_file_aio_write,
+	.aio_write	= shmem_file_aio_write,
 	.fsync		= noop_fsync,
 	.splice_read	= shmem_file_splice_read,
 	.splice_write	= generic_file_splice_write,
@@ -3100,3 +3133,142 @@ struct page *shmem_read_mapping_page_gfp(struct address_space *mapping,
 #endif
 }
 EXPORT_SYMBOL_GPL(shmem_read_mapping_page_gfp);
+
+#define F_ALL_SEALS (F_SEAL_SEAL | \
+		     F_SEAL_SHRINK | \
+		     F_SEAL_GROW | \
+		     F_SEAL_WRITE | \
+		     F_SEAL_FUTURE_WRITE)
+
+int shmem_add_seals(struct file *file, unsigned int seals)
+{
+	struct inode *inode = file_inode(file);
+	struct shmem_inode_info *info = SHMEM_I(inode);
+	int error;
+
+	if (file->f_op != &shmem_file_operations)
+		return -EINVAL;
+	if (!(file->f_mode & FMODE_WRITE))
+		return -EPERM;
+	if (seals & ~(unsigned int)F_ALL_SEALS)
+		return -EINVAL;
+
+	mutex_lock(&inode->i_mutex);
+
+	if (info->seals & F_SEAL_SEAL) {
+		error = -EPERM;
+		goto unlock;
+	}
+
+	if ((seals & F_SEAL_WRITE) && !(info->seals & F_SEAL_WRITE)) {
+		if (mapping_writably_mapped(file->f_mapping)) {
+			error = -EBUSY;
+			goto unlock;
+		}
+	}
+
+	info->seals |= seals;
+	error = 0;
+
+unlock:
+	mutex_unlock(&inode->i_mutex);
+	return error;
+}
+EXPORT_SYMBOL_GPL(shmem_add_seals);
+
+int shmem_get_seals(struct file *file)
+{
+	if (file->f_op != &shmem_file_operations)
+		return -EINVAL;
+
+	return SHMEM_I(file_inode(file))->seals;
+}
+EXPORT_SYMBOL_GPL(shmem_get_seals);
+
+long shmem_fcntl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	long error;
+
+	switch (cmd) {
+	case F_ADD_SEALS:
+		if (arg > UINT_MAX)
+			return -EINVAL;
+		error = shmem_add_seals(file, arg);
+		break;
+	case F_GET_SEALS:
+		error = shmem_get_seals(file);
+		break;
+	default:
+		error = -EINVAL;
+		break;
+	}
+
+	return error;
+}
+
+#define MFD_NAME_PREFIX "memfd:"
+#define MFD_NAME_PREFIX_LEN (sizeof(MFD_NAME_PREFIX) - 1)
+#define MFD_NAME_MAX_LEN (NAME_MAX - MFD_NAME_PREFIX_LEN)
+#define MFD_ALL_FLAGS (MFD_CLOEXEC | MFD_ALLOW_SEALING)
+
+SYSCALL_DEFINE2(memfd_create,
+		const char __user *, uname,
+		unsigned int, flags)
+{
+	struct shmem_inode_info *info;
+	struct file *file;
+	int fd, error;
+	char *name;
+	long len;
+
+	if (flags & ~(unsigned int)MFD_ALL_FLAGS)
+		return -EINVAL;
+
+	len = strnlen_user(uname, MFD_NAME_MAX_LEN + 1);
+	if (len <= 0)
+		return -EFAULT;
+	if (len > MFD_NAME_MAX_LEN + 1)
+		return -EINVAL;
+
+	name = kmalloc(len + MFD_NAME_PREFIX_LEN, GFP_TEMPORARY);
+	if (!name)
+		return -ENOMEM;
+
+	strcpy(name, MFD_NAME_PREFIX);
+	if (copy_from_user(&name[MFD_NAME_PREFIX_LEN], uname, len)) {
+		error = -EFAULT;
+		goto err_name;
+	}
+
+	if (name[len + MFD_NAME_PREFIX_LEN - 1]) {
+		error = -EFAULT;
+		goto err_name;
+	}
+
+	fd = get_unused_fd_flags((flags & MFD_CLOEXEC) ? O_CLOEXEC : 0);
+	if (fd < 0) {
+		error = fd;
+		goto err_name;
+	}
+
+	file = shmem_file_setup(name, 0, VM_NORESERVE);
+	if (IS_ERR(file)) {
+		error = PTR_ERR(file);
+		goto err_fd;
+	}
+	info = SHMEM_I(file_inode(file));
+	file->f_mode |= FMODE_LSEEK | FMODE_PREAD | FMODE_PWRITE;
+	file->f_flags |= O_RDWR | O_LARGEFILE;
+	if (flags & MFD_ALLOW_SEALING)
+		info->seals &= ~F_SEAL_SEAL;
+
+	fd_install(fd, file);
+	kfree(name);
+	return fd;
+
+err_fd:
+	put_unused_fd(fd);
+err_name:
+	kfree(name);
+	return error;
+}

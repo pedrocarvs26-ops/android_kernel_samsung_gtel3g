@@ -34,6 +34,10 @@
 #include <linux/of_device.h>
 #include <linux/of_address.h>
 #include <linux/of_gpio.h>
+#include <linux/wakelock.h>
+
+static struct wake_lock sci_kpd_wake_lock;
+static bool sci_kpd_wake_lock_inited;
 
 #include <mach/globalregs.h>
 #include <mach/hardware.h>
@@ -362,6 +366,10 @@ static irqreturn_t sci_keypad_isr(int irq, void *dev_id)
 	value |= KPD_INT_ALL;
 	__raw_writel(value, KPD_INT_CLR);
 
+	if (sci_kpd_wake_lock_inited)
+		wake_lock_timeout(&sci_kpd_wake_lock, 5 * HZ);
+	pm_wakeup_event(&sci_kpd->input_dev->dev, 5000);
+
 	if ((int_status & KPD_PRESS_INT0)) {
 		col = KPD_INT0_COL(key_status);
 		row = KPD_INT0_ROW(key_status);
@@ -463,6 +471,10 @@ static irqreturn_t sci_powerkey_isr(int irq, void *dev_id)
 	unsigned short key = KEY_POWER;
 	unsigned long value = !(gpio_get_value(PB_INT));
 	struct sci_keypad_t *sci_kpd = dev_id;
+
+	if (sci_kpd_wake_lock_inited)
+		wake_lock_timeout(&sci_kpd_wake_lock, 5 * HZ);
+	pm_wakeup_event(&sci_kpd->input_dev->dev, 5000);
 
 	if (last_value == value) {
 		/* seems an event is missing, just report it */
@@ -825,6 +837,12 @@ if(system_rev >=2)
 		goto out3;
 	}
 	device_init_wakeup(&pdev->dev, 1);
+	device_init_wakeup(&input_dev->dev, 1);
+	if (!sci_kpd_wake_lock_inited) {
+		wake_lock_init(&sci_kpd_wake_lock, WAKE_LOCK_SUSPEND, "sci_keypad");
+		sci_kpd_wake_lock_inited = true;
+	}
+	enable_irq_wake(sci_kpd->irq);
 
 	value = KPD_INT_DOWNUP;
 	if (pdata->support_long_key)
@@ -870,6 +888,7 @@ if(system_rev >=2)
 			gpio_to_irq(PB_INT));
 		goto out3;
 	}
+	enable_irq_wake(gpio_to_irq(PB_INT));
 
 #ifdef EXT_RSTN_VOLUME_DOWN
 #if defined(CONFIG_MACH_GRANDNEOVE3G)  || (defined(CONFIG_MACH_VIVALTO5MVE3G) && !defined(CONFIG_MACH_VIVALTO3MVE3G_LTN) && !defined(CONFIG_MACH_VIVALTO3MVEML3G))

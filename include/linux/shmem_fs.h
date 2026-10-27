@@ -12,6 +12,7 @@
 struct shmem_inode_info {
 	spinlock_t		lock;
 	unsigned long		flags;
+	unsigned int		seals;		/* shmem seals */
 	unsigned long		alloced;	/* data pages alloced to file */
 	union {
 		unsigned long	swapped;	/* subtotal assigned to swap */
@@ -54,6 +55,9 @@ extern struct page *shmem_read_mapping_page_gfp(struct address_space *mapping,
 					pgoff_t index, gfp_t gfp_mask);
 extern void shmem_truncate_range(struct inode *inode, loff_t start, loff_t end);
 extern int shmem_unuse(swp_entry_t entry, struct page *page);
+extern long shmem_fcntl(struct file *file, unsigned int cmd, unsigned long arg);
+extern int shmem_add_seals(struct file *file, unsigned int seals);
+extern int shmem_get_seals(struct file *file);
 
 static inline struct page *shmem_read_mapping_page(
 				struct address_space *mapping, pgoff_t index)
