@@ -380,8 +380,11 @@ static irqreturn_t gpio_keys_gpio_isr(int irq, void *dev_id)
 	if (bdata->is_deepsleep) {
 		bdata->is_deepsleep = false;
 	}
-	if (bdata->button->wakeup)
+	if (bdata->button->wakeup) {
 		pm_stay_awake(bdata->input->dev.parent);
+		if (gpio_keys_wake_lock_inited)
+			wake_lock_timeout(&gpio_keys_wake_lock, 5 * HZ);
+	}
 	if (bdata->timer_debounce)
 		mod_timer(&bdata->timer,
 			jiffies + msecs_to_jiffies(bdata->timer_debounce));
@@ -734,6 +737,10 @@ static int gpio_keys_probe(struct platform_device *pdev)
 	mutex_init(&ddata->disable_lock);
 
 	platform_set_drvdata(pdev, ddata);
+	if (!gpio_keys_wake_lock_inited) {
+		wake_lock_init(&gpio_keys_wake_lock, WAKE_LOCK_SUSPEND, "gpio_keys");
+		gpio_keys_wake_lock_inited = true;
+	}
 	input_set_drvdata(input, ddata);
 #ifndef CONFIG_OF
 	input->name = pdata->name ? : pdev->name;

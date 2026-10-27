@@ -421,13 +421,24 @@ power_attr(state);
  * are any wakeup events detected after 'wakeup_count' was written to.
  */
 
+#ifdef CONFIG_EARLYSUSPEND
+extern wait_queue_head_t earlysuspend_wakeup_wq;
+#endif
+
 static ssize_t wakeup_count_show(struct kobject *kobj,
 				struct kobj_attribute *attr,
 				char *buf)
 {
 	unsigned int val;
 
-	return pm_get_wakeup_count(&val, true) ?
+#ifdef CONFIG_EARLYSUSPEND
+	if (get_suspend_state() != PM_SUSPEND_ON) {
+		wait_event_interruptible_timeout(earlysuspend_wakeup_wq,
+			get_suspend_state() == PM_SUSPEND_ON,
+			msecs_to_jiffies(2000));
+	}
+#endif
+	return pm_get_wakeup_count(&val, false) ?
 		sprintf(buf, "%u\n", val) : -EINTR;
 }
 

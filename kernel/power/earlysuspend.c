@@ -38,6 +38,7 @@ static void late_resume(struct work_struct *work);
 static DECLARE_WORK(early_suspend_work, early_suspend);
 static DECLARE_WORK(late_resume_work, late_resume);
 static DEFINE_SPINLOCK(state_lock);
+DECLARE_WAIT_QUEUE_HEAD(earlysuspend_wakeup_wq);
 enum {
 	SUSPEND_REQUESTED = 0x1,
 	SUSPENDED = 0x2,
@@ -172,6 +173,10 @@ void request_suspend_state(suspend_state_t new_state)
 
 	spin_lock_irqsave(&state_lock, irqflags);
 	old_sleep = state & SUSPEND_REQUESTED;
+	if (old_sleep && new_state != PM_SUSPEND_ON) {
+		spin_unlock_irqrestore(&state_lock, irqflags);
+		return;
+	}
 	if (debug_mask & DEBUG_USER_STATE) {
 		struct timespec ts;
 		struct rtc_time tm;
@@ -191,6 +196,7 @@ void request_suspend_state(suspend_state_t new_state)
 	} else if (old_sleep && new_state == PM_SUSPEND_ON) {
 		state &= ~SUSPEND_REQUESTED;
 		wake_lock(&main_wake_lock);
+		wake_up_all(&earlysuspend_wakeup_wq);
 		queue_work(suspend_work_queue, &late_resume_work);
 	}
 	requested_suspend_state = new_state;

@@ -713,26 +713,21 @@ static int gen_panel_set_gamma(struct lcd *lcd, int intensity)
 	return 0;
 }
 #endif
+static bool bl_on_sent;
+
 static int gen_panel_set_bl_level(struct lcd *lcd, int intensity)
 {
-	struct device *dev = lcd->dev;
-	struct gen_cmd_desc *desc;
+	pr_debug("[LCD]set brightness (%d)\n", intensity);
 
-	printk("[LCD]set brightness (%d)\n", intensity);
-	
 	lcd->op_cmds[PANEL_BL_SET_BRT_CMD].desc->data[1] = intensity;
-	#if 0	
-	if (!desc) {
-		dev_err(dev, "[LCD] not found brightness level cmd\n");
-		return 0;
+	if (intensity > 0) {
+		if (!bl_on_sent) {
+			gen_panel_write_op_cmds(lcd, PANEL_BL_ON_CMD);
+			bl_on_sent = true;
+		}
+	} else {
+		bl_on_sent = false;
 	}
-
-	if (data_type)
-		memcpy(&desc->data[data_offset], &intensity, data_type);
-	//gen_panel_write_op_cmds(lcd, index);
-	#endif
-
-	gen_panel_write_op_cmds(lcd, PANEL_BL_ON_CMD);
 	gen_panel_write_op_cmds(lcd, PANEL_BL_SET_BRT_CMD);
 
 	return intensity;
